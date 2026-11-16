@@ -557,10 +557,6 @@ impl App {
         {
             ui.label(RichText::new("Esta macro está vazia no teclado; grave-a na aba Macros.").color(theme::WARN));
         }
-        if capture && cfg!(target_os = "macos") {
-            ui.label(RichText::new("No macOS o keyglow ainda não lê o teclado; escolha a tecla na lista.").color(theme::WARN));
-            capture = false;
-        }
 
         ui.add_space(10.0);
         let cell = draft.encode();
@@ -716,9 +712,7 @@ impl App {
             ui.label(RichText::new("Espera padrão").weak());
             ui.add(egui::DragValue::new(&mut self.ob.default_delay).range(0..=u16::MAX).suffix(" ms"));
             ui.add_space(14.0);
-            if cfg!(target_os = "macos") {
-                ui.label(RichText::new("Gravar do teclado: ainda não disponível no macOS").weak());
-            } else if self.ob.recording.is_some() {
+            if self.ob.recording.is_some() {
                 if ui.button("Parar gravação").clicked() {
                     self.ob.recording = None;
                 }

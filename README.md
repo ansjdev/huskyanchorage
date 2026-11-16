@@ -7,7 +7,7 @@ O app procura sozinho os teclados compatíveis e fala direto com eles.
   (teclados EVision).
 - **Efeitos do app**: calculados em tempo real (~30 quadros/s), incluindo efeitos que reagem
   às teclas e à música que está tocando no PC.
-- **Teclas pressionadas**: aparecem destacadas no teclado desenhado na tela (Linux e Windows).
+- **Teclas pressionadas**: aparecem destacadas no teclado desenhado na tela.
 - **Teclas e macros gravadas no teclado** (Husky Anchorage HTG200 e Sled HTG500): mudar o que
   cada tecla faz, criar macros e voltar ao padrão de fábrica. Veja
   [Teclas e macros](#teclas-e-macros).
@@ -49,7 +49,7 @@ computador, com o keyglow fechado.
   desfazem. A tecla Fn nunca é alterada.
 - **Macros**: até 10 macros de até 70 passos (apertar/soltar tecla ou botão do mouse, com
   espera em ms depois de cada passo). Dá para montar passo a passo ou gravar digitando no
-  teclado (Linux e Windows). Uma macro que termina com tecla apertada não é gravada. Na
+  teclado. Uma macro que termina com tecla apertada não é gravada. Na
   tecla, a macro roda N vezes, enquanto a tecla estiver apertada ou até ela ser apertada de
   novo.
 - **Teclado**: versão do firmware e volta ao padrão de fábrica (apaga macros e mudanças de
@@ -95,8 +95,11 @@ cargo build --release --target x86_64-pc-windows-gnu
 cargo run --release
 ```
 
-No macOS, o app ainda não mostra as teclas pressionadas (isso exige a permissão de
-Monitoramento de Entrada). Os efeitos que reagem ao digitar ficam parados.
+No macOS, a leitura de teclas consulta o estado do teclado no sistema, então ela também vê
+teclas de outros teclados conectados. Se as teclas não aparecerem no desenho, libere o
+aplicativo que abriu o keyglow (o Terminal, por exemplo) em Ajustes do Sistema > Privacidade
+e Segurança > Monitoramento de Entrada e abra o keyglow de novo. Teclas de multimídia
+(volume, mudo) não são lidas.
 
 ## Instalação no Linux
 
@@ -131,7 +134,7 @@ você aperta a tecla correspondente. A calibração fica salva por teclado em
 | `src/onboard.rs` | Formato do mapa de teclas e das macros gravadas no teclado |
 | `src/effects.rs` | Efeitos de software: **crie os seus aqui** |
 | `src/engine.rs` | Thread que conecta no teclado, roda o efeito e envia as imagens |
-| `src/input/` | Leitura das teclas: evdev (Linux) e hook de teclado (Windows) |
+| `src/input/` | Leitura das teclas: evdev (Linux), hook de teclado (Windows) e consulta do estado das teclas (macOS) |
 | `src/audio/` | Som do PC: `pw-record` (Linux) e loopback via cpal (Windows/macOS) + FFT em 21 faixas |
 | `src/app.rs` | Interface gráfica (estado e telas) |
 | `src/app/onboard_ui.rs` | Abas Teclas, Macros e Teclado |

@@ -675,6 +675,10 @@ impl App {
                         ui.label(RichText::new(label).weak());
                         color_button(ui, &mut p.secondary);
                     }
+                    Control::Color(label, field) => {
+                        ui.label(RichText::new(label).weak());
+                        color_button(ui, field(p));
+                    }
                     Control::Speed => {
                         ui.label(RichText::new("Velocidade").weak());
                         ui.add(egui::Slider::new(&mut p.speed, 0.1..=3.0).custom_formatter(|v, _| format!("{v:.1}×")));
