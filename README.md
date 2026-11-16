@@ -92,14 +92,19 @@ cargo build --release --target x86_64-pc-windows-gnu
 ## Instalação no macOS
 
 ```sh
-cargo run --release
+./scripts/instalar-macos.sh
 ```
+
+O script compila, monta o `KeyGlow.app` e instala em `/Applications`: depois é só abrir pelo
+Spotlight (⌘ Espaço, "KeyGlow") ou pelo Launchpad. Rode de novo para atualizar o app depois
+de mudar o código. Para só testar, sem instalar: `cargo run --release`.
 
 No macOS, a leitura de teclas consulta o estado do teclado no sistema, então ela também vê
 teclas de outros teclados conectados. Se as teclas não aparecerem no desenho, libere o
-aplicativo que abriu o keyglow (o Terminal, por exemplo) em Ajustes do Sistema > Privacidade
-e Segurança > Monitoramento de Entrada e abra o keyglow de novo. Teclas de multimídia
-(volume, mudo) não são lidas.
+KeyGlow (ou o Terminal, se abriu com `cargo run`) em Ajustes do Sistema > Privacidade e
+Segurança > Monitoramento de Entrada e abra o keyglow de novo. Como o app é assinado só
+localmente, o macOS pode pedir essa permissão de novo depois de cada reinstalação. Teclas de
+multimídia (volume, mudo) não são lidas.
 
 ## Instalação no Linux
 
