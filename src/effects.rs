@@ -22,6 +22,10 @@ pub struct Params {
     pub glow_key: Rgb,
     pub glow_top: Rgb,
     pub glow_bottom: Rgb,
+    /// Cores do equalizador no efeito "Automático: música ou ondas" (as das
+    /// ondas são `primary` e `secondary`).
+    pub auto_eq_bottom: Rgb,
+    pub auto_eq_top: Rgb,
     /// Cores do efeito "Pintura", uma por célula da grade. É salvo por
     /// teclado (veja `config`); aqui só é lido de configurações antigas.
     #[serde(skip_serializing)]
@@ -38,6 +42,8 @@ impl Default for Params {
             glow_key: [255, 70, 0],
             glow_top: [110, 110, 110],
             glow_bottom: [140, 45, 0],
+            auto_eq_bottom: [0, 160, 255],
+            auto_eq_top: [255, 0, 160],
             paint: Vec::new(),
         }
     }
@@ -250,6 +256,13 @@ impl Effect for Spectrum {
     }
 
     fn render(&mut self, ctx: &Ctx, frame: &mut [Rgb]) {
+        Self::draw(ctx, frame, ctx.params.primary, ctx.params.secondary);
+    }
+}
+
+impl Spectrum {
+    /// Desenha as barras indo da cor `bottom` (embaixo) à `top` (no pico).
+    fn draw(ctx: &Ctx, frame: &mut [Rgb], bottom: Rgb, top: Rgb) {
         let (rows, cols) = (ctx.grid.rows, ctx.grid.cols);
         for (i, px) in frame.iter_mut().enumerate() {
             let (row, col) = ctx.grid.row_col(i);
@@ -259,7 +272,7 @@ impl Effect for Spectrum {
             let height = ctx.audio.bands[band] * rows as f32;
             let from_bottom = (rows - 1 - row) as f32;
             let lit = (height - from_bottom).clamp(0.0, 1.0);
-            let color = lerp(ctx.params.primary, ctx.params.secondary, from_bottom / (rows.max(2) - 1) as f32);
+            let color = lerp(bottom, top, from_bottom / (rows.max(2) - 1) as f32);
             *px = scale(color, lit);
         }
     }
@@ -351,7 +364,6 @@ impl Effect for MusicKeys {
 /// Troca sozinho de efeito: equalizador enquanto toca música, ondas quando
 /// ela para.
 struct AutoMusic {
-    spectrum: Spectrum,
     ripples: Ripples,
     /// Segundos seguidos com som (positivo) ou em silêncio (negativo).
     streak: f32,
@@ -372,7 +384,7 @@ impl AutoMusic {
     const FADE: f32 = 0.6;
 
     fn new() -> Self {
-        Self { spectrum: Spectrum, ripples: Ripples { waves: Vec::new() }, streak: 0.0, playing: false, mix: 0.0, scratch: Vec::new() }
+        Self { ripples: Ripples { waves: Vec::new() }, streak: 0.0, playing: false, mix: 0.0, scratch: Vec::new() }
     }
 }
 
@@ -401,7 +413,7 @@ impl Effect for AutoMusic {
         self.ripples.render(ctx, frame);
         if self.mix > 0.0 {
             self.scratch.resize(frame.len(), [0; 3]);
-            self.spectrum.render(ctx, &mut self.scratch);
+            Spectrum::draw(ctx, &mut self.scratch, ctx.params.auto_eq_bottom, ctx.params.auto_eq_top);
             for (px, &eq) in frame.iter_mut().zip(&self.scratch) {
                 *px = lerp(*px, eq, self.mix);
             }
@@ -467,7 +479,13 @@ pub const EFFECTS: &[EffectInfo] = &[
     EffectInfo {
         name: "Automático: música ou ondas",
         description: "Equalizador enquanto toca música no PC; ondas saindo das teclas quando ela para",
-        controls: TWO_COLORS,
+        controls: &[
+            Control::Color("Equalizador: cor de baixo", |p| &mut p.auto_eq_bottom),
+            Control::Color("Equalizador: cor do pico", |p| &mut p.auto_eq_top),
+            Control::Primary("Ondas: cor principal"),
+            Control::Secondary("Ondas: cor de fundo"),
+            Control::Speed,
+        ],
         build: || Box::new(AutoMusic::new()),
     },
 ];
@@ -478,10 +496,14 @@ mod tests {
 
     /// Roda `secs` segundos de um efeito a 30 quadros/s e devolve o último quadro.
     fn run(fx: &mut dyn Effect, secs: f32, audio: &AudioData) -> Vec<Rgb> {
-        let (grid, params) = (Grid::full(6, 21), Params::default());
+        run_with(fx, secs, audio, &Params::default())
+    }
+
+    fn run_with(fx: &mut dyn Effect, secs: f32, audio: &AudioData, params: &Params) -> Vec<Rgb> {
+        let grid = Grid::full(6, 21);
         let mut frame = vec![[0; 3]; grid.len()];
         for _ in 0..(secs * 30.0).round().max(1.0) as usize {
-            let ctx = Ctx { time: 0.0, dt: 1.0 / 30.0, params: &params, grid: &grid, events: &[], pressed: &[], audio };
+            let ctx = Ctx { time: 0.0, dt: 1.0 / 30.0, params, grid: &grid, events: &[], pressed: &[], audio };
             fx.render(&ctx, &mut frame);
         }
         frame
@@ -491,7 +513,10 @@ mod tests {
     fn auto_music_switches_between_ripples_and_equalizer() {
         let silence = AudioData::default();
         let ripples = run(&mut Ripples { waves: Vec::new() }, 0.1, &silence);
-        let equalizer = run(&mut Spectrum, 0.1, &music());
+        // O equalizador do automático tem cores próprias.
+        let p = Params::default();
+        let eq_colors = Params { primary: p.auto_eq_bottom, secondary: p.auto_eq_top, ..p };
+        let equalizer = run_with(&mut Spectrum, 0.1, &music(), &eq_colors);
         assert_ne!(ripples, equalizer);
 
         let mut fx = AutoMusic::new();

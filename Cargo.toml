@@ -20,6 +20,8 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Wi
 cpal = "0.18.2"
 # Abre sem exclusividade: a coleção de controle divide a interface USB com o teclado.
 hidapi = { version = "2.6.7", default-features = false, features = ["macos-shared-device"] }
+# Só para desligar o App Nap (veja `keep_awake_in_background` em main.rs).
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSProcessInfo", "NSString"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 evdev = "0.13.2"
