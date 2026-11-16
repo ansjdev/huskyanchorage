@@ -17,6 +17,15 @@ pub struct Params {
     pub speed: f32,
     /// Brilho geral de 0.0 a 1.0.
     pub brightness: f32,
+    /// Cores do efeito "Música + teclas": a fileira da tecla apertada e o
+    /// fundo (fileira de cima e fileira de baixo).
+    pub glow_key: Rgb,
+    pub glow_top: Rgb,
+    pub glow_bottom: Rgb,
+    /// Cores do equalizador no efeito "Automático: música ou ondas" (as das
+    /// ondas são `primary` e `secondary`).
+    pub auto_eq_bottom: Rgb,
+    pub auto_eq_top: Rgb,
     /// Cores do efeito "Pintura", uma por célula da grade. É salvo por
     /// teclado (veja `config`); aqui só é lido de configurações antigas.
     #[serde(skip_serializing)]
@@ -30,6 +39,11 @@ impl Default for Params {
             secondary: [10, 0, 30],
             speed: 1.0,
             brightness: 1.0,
+            glow_key: [255, 70, 0],
+            glow_top: [110, 110, 110],
+            glow_bottom: [140, 45, 0],
+            auto_eq_bottom: [0, 160, 255],
+            auto_eq_top: [255, 0, 160],
             paint: Vec::new(),
         }
     }
@@ -95,6 +109,8 @@ pub trait Effect: Send {
 pub enum Control {
     Primary(&'static str),
     Secondary(&'static str),
+    /// Uma cor própria do efeito, guardada no campo de `Params` que a função devolve.
+    Color(&'static str, fn(&mut Params) -> &mut Rgb),
     Speed,
 }
 
@@ -240,6 +256,13 @@ impl Effect for Spectrum {
     }
 
     fn render(&mut self, ctx: &Ctx, frame: &mut [Rgb]) {
+        Self::draw(ctx, frame, ctx.params.primary, ctx.params.secondary);
+    }
+}
+
+impl Spectrum {
+    /// Desenha as barras indo da cor `bottom` (embaixo) à `top` (no pico).
+    fn draw(ctx: &Ctx, frame: &mut [Rgb], bottom: Rgb, top: Rgb) {
         let (rows, cols) = (ctx.grid.rows, ctx.grid.cols);
         for (i, px) in frame.iter_mut().enumerate() {
             let (row, col) = ctx.grid.row_col(i);
@@ -249,7 +272,7 @@ impl Effect for Spectrum {
             let height = ctx.audio.bands[band] * rows as f32;
             let from_bottom = (rows - 1 - row) as f32;
             let lit = (height - from_bottom).clamp(0.0, 1.0);
-            let color = lerp(ctx.params.primary, ctx.params.secondary, from_bottom / (rows.max(2) - 1) as f32);
+            let color = lerp(bottom, top, from_bottom / (rows.max(2) - 1) as f32);
             *px = scale(color, lit);
         }
     }
@@ -273,6 +296,127 @@ impl Effect for BassPulse {
             let spread = 1.0 - (col as f32 - center).abs() / center;
             let v = (ctx.audio.bass * 1.3 - (1.0 - spread) * 0.6).clamp(0.0, 1.0);
             *px = hsv(self.hue + col as f32 * 0.01, 1.0, 0.08 + 0.92 * v);
+        }
+    }
+}
+
+/// Música e teclas juntas, sobre uma luz de fundo em degradê (por padrão,
+/// branco na fileira de cima decaindo para o laranja na de baixo).
+///
+/// - tocando música: o equalizador aparece por cima do fundo;
+/// - digitando: a fileira da tecla apertada acende (laranja forte por padrão),
+///   mais forte perto da tecla, por cima do equalizador (que continua nas outras);
+/// - sem música e sem digitar: fica só o fundo.
+struct MusicKeys {
+    heat: Vec<f32>,
+}
+
+impl MusicKeys {
+    /// Quanto a ponta mais distante da fileira acende (a tecla acende 1.0).
+    const ROW_FAR: f32 = 0.35;
+
+    /// Cor de fundo da fileira `row` (0 = a de cima).
+    fn backlight(p: &Params, row: usize, rows: usize) -> Rgb {
+        lerp(p.glow_top, p.glow_bottom, row as f32 / (rows.max(2) - 1) as f32)
+    }
+
+    fn new() -> Self {
+        Self { heat: Vec::new() }
+    }
+}
+
+impl Effect for MusicKeys {
+    fn uses_audio(&self) -> bool {
+        true
+    }
+
+    fn render(&mut self, ctx: &Ctx, frame: &mut [Rgb]) {
+        self.heat.resize(frame.len(), 0.0);
+        for h in self.heat.iter_mut() {
+            *h = (*h - ctx.dt * 1.2 * ctx.params.speed).max(0.0);
+        }
+        let tapped = ctx.events.iter().filter(|e| e.pressed).filter_map(|e| e.led);
+        // A fileira inteira da tecla acende, mais forte perto dela.
+        let span = (ctx.grid.cols.max(2) - 1) as f32;
+        for led in tapped.chain(ctx.pressed.iter().copied()).filter(|&l| l < frame.len()) {
+            let (row, col) = ctx.grid.row_col(led);
+            for c in 0..ctx.grid.cols {
+                let near = 1.0 - c.abs_diff(col) as f32 / span;
+                let h = &mut self.heat[row * ctx.grid.cols + c];
+                *h = h.max(Self::ROW_FAR + (1.0 - Self::ROW_FAR) * near);
+            }
+        }
+
+        let (rows, cols) = (ctx.grid.rows, ctx.grid.cols);
+        for (i, px) in frame.iter_mut().enumerate() {
+            let (row, col) = ctx.grid.row_col(i);
+            let band = (col * BANDS / cols.max(1)).min(BANDS - 1);
+            let height = ctx.audio.bands[band] * rows as f32;
+            let from_bottom = (rows - 1 - row) as f32;
+            let lit = (height - from_bottom).clamp(0.0, 1.0);
+            // Do azul (graves) ao rosa (agudos), para destacar do fundo.
+            let bar = hsv(0.55 + 0.4 * col as f32 / cols.max(1) as f32, 1.0, 1.0);
+            *px = lerp(lerp(Self::backlight(ctx.params, row, rows), bar, lit), ctx.params.glow_key, self.heat[i]);
+        }
+    }
+}
+
+/// Troca sozinho de efeito: equalizador enquanto toca música, ondas quando
+/// ela para.
+struct AutoMusic {
+    ripples: Ripples,
+    /// Segundos seguidos com som (positivo) ou em silêncio (negativo).
+    streak: f32,
+    playing: bool,
+    /// 0.0 = ondas, 1.0 = equalizador (a troca é uma passagem suave).
+    mix: f32,
+    scratch: Vec<Rgb>,
+}
+
+impl AutoMusic {
+    /// Volume a partir do qual conta como "tem som".
+    const LEVEL: f32 = 0.01;
+    /// Segundos de som para ir ao equalizador (ignora avisos curtos do sistema).
+    const START: f32 = 1.0;
+    /// Segundos de silêncio para voltar às ondas (ignora o intervalo entre músicas).
+    const STOP: f32 = 4.0;
+    /// Segundos da passagem de um efeito para o outro.
+    const FADE: f32 = 0.6;
+
+    fn new() -> Self {
+        Self { ripples: Ripples { waves: Vec::new() }, streak: 0.0, playing: false, mix: 0.0, scratch: Vec::new() }
+    }
+}
+
+impl Effect for AutoMusic {
+    fn uses_audio(&self) -> bool {
+        true
+    }
+
+    fn render(&mut self, ctx: &Ctx, frame: &mut [Rgb]) {
+        let sound = ctx.audio.level > Self::LEVEL;
+        self.streak = match (sound, self.streak > 0.0) {
+            (true, true) => self.streak + ctx.dt,
+            (true, false) => ctx.dt,
+            (false, false) => self.streak - ctx.dt,
+            (false, true) => -ctx.dt,
+        };
+        if self.streak >= Self::START {
+            self.playing = true;
+        } else if self.streak <= -Self::STOP {
+            self.playing = false;
+        }
+        let step = ctx.dt / Self::FADE;
+        self.mix = if self.playing { (self.mix + step).min(1.0) } else { (self.mix - step).max(0.0) };
+
+        // As ondas rodam sempre, para as teclas apertadas não se perderem na troca.
+        self.ripples.render(ctx, frame);
+        if self.mix > 0.0 {
+            self.scratch.resize(frame.len(), [0; 3]);
+            Spectrum::draw(ctx, &mut self.scratch, ctx.params.auto_eq_bottom, ctx.params.auto_eq_top);
+            for (px, &eq) in frame.iter_mut().zip(&self.scratch) {
+                *px = lerp(*px, eq, self.mix);
+            }
         }
     }
 }
@@ -321,4 +465,139 @@ pub const EFFECTS: &[EffectInfo] = &[
         controls: &[Control::Speed],
         build: || Box::new(BassPulse { hue: 0.0 }),
     },
+    EffectInfo {
+        name: "Música + teclas",
+        description: "Equalizador da música e a fileira da tecla acendendo ao digitar, sobre um fundo em degradê",
+        controls: &[
+            Control::Color("Cor das teclas", |p| &mut p.glow_key),
+            Control::Color("Fundo em cima", |p| &mut p.glow_top),
+            Control::Color("Fundo embaixo", |p| &mut p.glow_bottom),
+            Control::Speed,
+        ],
+        build: || Box::new(MusicKeys::new()),
+    },
+    EffectInfo {
+        name: "Automático: música ou ondas",
+        description: "Equalizador enquanto toca música no PC; ondas saindo das teclas quando ela para",
+        controls: &[
+            Control::Color("Equalizador: cor de baixo", |p| &mut p.auto_eq_bottom),
+            Control::Color("Equalizador: cor do pico", |p| &mut p.auto_eq_top),
+            Control::Primary("Ondas: cor principal"),
+            Control::Secondary("Ondas: cor de fundo"),
+            Control::Speed,
+        ],
+        build: || Box::new(AutoMusic::new()),
+    },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Roda `secs` segundos de um efeito a 30 quadros/s e devolve o último quadro.
+    fn run(fx: &mut dyn Effect, secs: f32, audio: &AudioData) -> Vec<Rgb> {
+        run_with(fx, secs, audio, &Params::default())
+    }
+
+    fn run_with(fx: &mut dyn Effect, secs: f32, audio: &AudioData, params: &Params) -> Vec<Rgb> {
+        let grid = Grid::full(6, 21);
+        let mut frame = vec![[0; 3]; grid.len()];
+        for _ in 0..(secs * 30.0).round().max(1.0) as usize {
+            let ctx = Ctx { time: 0.0, dt: 1.0 / 30.0, params, grid: &grid, events: &[], pressed: &[], audio };
+            fx.render(&ctx, &mut frame);
+        }
+        frame
+    }
+
+    #[test]
+    fn auto_music_switches_between_ripples_and_equalizer() {
+        let silence = AudioData::default();
+        let ripples = run(&mut Ripples { waves: Vec::new() }, 0.1, &silence);
+        // O equalizador do automático tem cores próprias.
+        let p = Params::default();
+        let eq_colors = Params { primary: p.auto_eq_bottom, secondary: p.auto_eq_top, ..p };
+        let equalizer = run_with(&mut Spectrum, 0.1, &music(), &eq_colors);
+        assert_ne!(ripples, equalizer);
+
+        let mut fx = AutoMusic::new();
+        assert_eq!(run(&mut fx, 1.0, &silence), ripples);
+        // Um som curto não troca; música de verdade troca.
+        assert_eq!(run(&mut fx, 0.5, &music()), ripples);
+        assert_eq!(run(&mut fx, 0.5, &silence), ripples);
+        assert_eq!(run(&mut fx, 3.0, &music()), equalizer);
+        // Um intervalo curto não volta; silêncio de verdade volta.
+        assert_ne!(run(&mut fx, 2.0, &silence), ripples);
+        assert_eq!(run(&mut fx, 4.0, &silence), ripples);
+    }
+
+    struct Scene {
+        fx: MusicKeys,
+        grid: Grid,
+        params: Params,
+    }
+
+    impl Scene {
+        fn new() -> Self {
+            Self { fx: MusicKeys::new(), grid: Grid::full(6, 21), params: Params::default() }
+        }
+
+        /// Roda `secs` segundos a 30 quadros/s e devolve o último quadro.
+        fn run(&mut self, secs: f32, pressed: &[usize], audio: &AudioData) -> Vec<Rgb> {
+            let mut frame = vec![[0; 3]; self.grid.len()];
+            for _ in 0..(secs * 30.0).round().max(1.0) as usize {
+                let ctx = Ctx { time: 0.0, dt: 1.0 / 30.0, params: &self.params, grid: &self.grid, events: &[], pressed, audio };
+                self.fx.render(&ctx, &mut frame);
+            }
+            frame
+        }
+    }
+
+    fn music() -> AudioData {
+        AudioData { bands: [1.0; BANDS], bass: 1.0, level: 0.5 }
+    }
+
+    fn is_backlight(s: &Scene, frame: &[Rgb]) -> bool {
+        frame.iter().enumerate().all(|(i, &px)| px == MusicKeys::backlight(&s.params, s.grid.row_col(i).0, s.grid.rows))
+    }
+
+    #[test]
+    fn music_keys_backlight_is_white_on_top_and_orange_at_the_bottom() {
+        let mut s = Scene::new();
+        let frame = s.run(10.0, &[], &AudioData::default());
+        assert!(is_backlight(&s, &frame));
+        assert_eq!(frame[0], s.params.glow_top);
+        assert_eq!(frame[5 * 21], s.params.glow_bottom);
+        assert!(frame[2 * 21][0] > frame[0][0] && frame[2 * 21][0] < frame[5 * 21][0], "o meio fica entre as duas cores");
+    }
+
+    #[test]
+    fn music_keys_key_lights_its_whole_row_in_strong_orange() {
+        let mut s = Scene::new();
+        // LED 40 = fileira 1, coluna 19.
+        let frame = s.run(0.5, &[40], &AudioData::default());
+        assert_eq!(frame[40], s.params.glow_key);
+        let row_bg = MusicKeys::backlight(&s.params, 1, 6);
+        assert!(frame[21..42].iter().all(|&px| px != row_bg), "a fileira inteira reage");
+        assert!(frame[39][2] < frame[21][2], "mais forte perto da tecla");
+        assert_eq!(frame[0], s.params.glow_top, "as outras fileiras não mudam");
+        assert_eq!(frame[42], MusicKeys::backlight(&s.params, 2, 6));
+    }
+
+    #[test]
+    fn music_keys_keeps_the_bars_on_other_rows_while_typing() {
+        let mut s = Scene::new();
+        let frame = s.run(1.0, &[], &music());
+        let bar = |i: usize| hsv(0.55 + 0.4 * (i % 21) as f32 / 21.0, 1.0, 1.0);
+        assert!(frame.iter().enumerate().all(|(i, &px)| px == bar(i)), "com todas as faixas no máximo, tudo é barra");
+        // Digitando: a fileira da tecla acende e as outras seguem com a música.
+        let frame = s.run(0.5, &[40], &music());
+        assert_eq!(frame[40], s.params.glow_key);
+        assert!((0..126).filter(|i| !(21..42).contains(i)).all(|i| frame[i] == bar(i)));
+        // Parou de digitar: a fileira volta para a música.
+        let frame = s.run(3.0, &[], &music());
+        assert!(frame.iter().enumerate().all(|(i, &px)| px == bar(i)));
+        // Parou a música: fica só o fundo.
+        let frame = s.run(1.0, &[], &AudioData::default());
+        assert!(is_backlight(&s, &frame));
+    }
+}

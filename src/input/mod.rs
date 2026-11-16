@@ -1,15 +1,18 @@
 //! Leitura das teclas, com uma implementação por sistema:
 //! - Linux: evdev, só os dispositivos do teclado conectado (`linux.rs`);
-//! - Windows: hook global de teclado (`windows.rs`).
+//! - Windows: hook global de teclado (`windows.rs`);
+//! - macOS: consulta do estado das teclas (`macos.rs`).
 //!
-//! Os códigos de tecla são sempre os do Linux (evdev), inclusive no Windows,
-//! para que a calibração salva valha nos dois sistemas.
+//! Os códigos de tecla são sempre os do Linux (evdev), em todos os sistemas,
+//! para que a calibração salva valha em qualquer um deles.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(windows)]
 mod windows;
 
@@ -33,7 +36,6 @@ pub struct InputState {
 
 impl InputState {
     /// Registra uma tecla pressionada (`down`) ou solta. Ignora repetições.
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn record(&mut self, code: u16, down: bool) {
         if code == KEY_PHANTOM {
             return;
@@ -58,9 +60,7 @@ pub fn spawn(state: Arc<Mutex<InputState>>) {
     #[cfg(windows)]
     windows::spawn(state);
     #[cfg(target_os = "macos")]
-    {
-        state.lock().unwrap().error = Some("leitura de teclas ainda não suportada no macOS".into());
-    }
+    macos::spawn(state);
 }
 
 /// Nome curto de uma tecla (código evdev) para mostrar na tela.

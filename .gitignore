@@ -1,3 +1,8 @@
 /target
 .claude/settings.local.json
 /dist
+
+# Short do YouTube (fora do repo)
+youtube-short/
+
+.DS_Store

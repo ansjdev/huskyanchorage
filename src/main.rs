@@ -26,6 +26,7 @@ mod hid;
 mod input;
 mod keyboard_view;
 mod keymap;
+mod onboard;
 mod screenshot;
 mod theme;
 
@@ -54,6 +55,23 @@ fn print_scan() {
     }
 }
 
+/// macOS: com a janela coberta ou escondida por cerca de um minuto, o sistema
+/// passa a atrasar os `sleep` do motor e da leitura de teclas (App Nap e
+/// agrupamento de timers), e os efeitos caem de ~30 para menos de 10
+/// quadros/s. Declarar uma atividade pedida pelo usuário e sensível a atraso
+/// desliga isso (sem a `LatencyCritical` ainda cai para ~10 quadros/s); o Mac
+/// continua podendo dormir por inatividade.
+#[cfg(target_os = "macos")]
+fn keep_awake_in_background() {
+    use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
+    let activity = NSProcessInfo::processInfo().beginActivityWithOptions_reason(
+        NSActivityOptions::UserInitiatedAllowingIdleSystemSleep | NSActivityOptions::LatencyCritical,
+        &NSString::from_str("efeitos de luz no teclado"),
+    );
+    // A atividade vale enquanto o objeto existir: fica até o app fechar.
+    std::mem::forget(activity);
+}
+
 fn main() -> eframe::Result {
     if std::env::args().any(|a| a == "--scan") {
         print_scan();
@@ -67,6 +85,9 @@ fn main() -> eframe::Result {
         std::env::set_var("DISABLE_MANGOHUD", "1");
         std::env::remove_var("MANGOHUD");
     }
+
+    #[cfg(target_os = "macos")]
+    keep_awake_in_background();
 
     let config = config::Config::load();
 
