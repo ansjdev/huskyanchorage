@@ -18,12 +18,18 @@ use std::time::{Duration, Instant};
 
 const FRAME_TIME: Duration = Duration::from_millis(33);
 const RECONNECT_TIME: Duration = Duration::from_secs(2);
+/// Cor da prévia no modo "Do SignalRGB" (não dá para ler as cores reais).
+const SIGNALRGB_PREVIEW: Rgb = [0, 70, 130];
 
 pub enum Cmd {
     /// Volta ao efeito do teclado; nos EVision, grava e ativa `HwMode`.
     Hardware(HwMode),
     /// Ativa o efeito de software de índice `n` em [`EFFECTS`].
     Software(usize),
+    /// Ativa (`true`) ou desativa (`false`) o modo "Do SignalRGB": o motor
+    /// devolve o teclado ao SignalRGB e passa a só mostrar o que ele está
+    /// fazendo, lido pela API local.
+    SignalRgb(bool),
     /// Troca para o teclado com este id.
     Select(String),
     /// Procura teclados de novo.
@@ -130,11 +136,19 @@ pub struct Engine {
     effect: Option<Box<dyn Effect>>,
     effect_start: Instant,
     last_sent: Option<(Vec<Rgb>, Instant)>,
+    /// Modo "Do SignalRGB" ativo: o keyglow não toca no teclado.
+    signalrgb_active: bool,
+    /// O teclado já foi posto em modo apagado para o SignalRGB? Volta a
+    /// `false` a cada reconexão, para reaplicar no teclado novo.
+    signalrgb_off_applied: bool,
+    /// Quadros vindos do plugin do SignalRGB (aberto na primeira ativação).
+    signalrgb_rx: Option<Receiver<Vec<Rgb>>>,
 }
 
 pub struct Start {
     pub hw: HwMode,
     pub software_effect: Option<usize>,
+    pub signalrgb: bool,
     pub device: Option<String>,
 }
 
@@ -162,6 +176,9 @@ pub fn spawn(
         effect: start.software_effect.and_then(|i| EFFECTS.get(i)).map(|e| (e.build)()),
         effect_start: Instant::now(),
         last_sent: None,
+        signalrgb_active: start.signalrgb,
+        signalrgb_off_applied: false,
+        signalrgb_rx: start.signalrgb.then(|| crate::signalrgb::spawn(crate::signalrgb::PORT)),
     };
     let handle = thread::Builder::new()
         .name("engine".into())
@@ -186,6 +203,7 @@ impl Engine {
                         self.hw = m;
                         self.effect_index = None;
                         self.effect = None;
+                        self.signalrgb_active = false;
                         self.leave_direct();
                         if let Some(kb) = self.kb.as_mut()
                             && let Err(e) = kb.set_hw_mode(&m)
@@ -197,6 +215,30 @@ impl Engine {
                         self.effect_index = Some(i);
                         self.effect = EFFECTS.get(i).map(|e| (e.build)());
                         self.effect_start = Instant::now();
+                        self.signalrgb_active = false;
+                    }
+                    Cmd::SignalRgb(enable) => {
+                        self.signalrgb_active = enable;
+                        self.leave_direct();
+                        if enable {
+                            self.effect_index = None;
+                            self.effect = None;
+                            // Aplicado no tick, que já trata teclado ausente.
+                            self.signalrgb_off_applied = false;
+                            // A porta fica aberta até o app fechar.
+                            if self.signalrgb_rx.is_none() {
+                                self.signalrgb_rx =
+                                    Some(crate::signalrgb::spawn(crate::signalrgb::PORT));
+                            }
+                        } else if let Some(kb) = self.kb.as_mut() {
+                            // Não deixa o último quadro do SignalRGB na tela.
+                            // Saindo: devolve o efeito de fábrica escolhido,
+                            // senão o teclado fica apagado.
+                            let saved = self.hw;
+                            if let Err(e) = kb.set_hw_mode(&saved) {
+                                self.disconnect(e.to_string());
+                            }
+                        }
                     }
                     Cmd::Select(id) => {
                         self.leave_direct();
@@ -293,6 +335,7 @@ impl Engine {
                 drop(sh);
                 self.kb = Some(kb);
                 self.in_direct = false;
+                self.signalrgb_off_applied = false;
             }
             Err(e) => self.shared.lock().unwrap().status = Status::Connecting(format!("{}: {e}", entry.name)),
         }
@@ -301,6 +344,7 @@ impl Engine {
     fn disconnect(&mut self, reason: String) {
         self.kb = None;
         self.in_direct = false;
+        self.signalrgb_off_applied = false;
         self.last_attempt = Some(Instant::now());
         self.shared.lock().unwrap().status = Status::Connecting(format!("conexão perdida: {reason}"));
     }
@@ -354,6 +398,52 @@ impl Engine {
     }
 
     fn tick(&mut self, dt: f32) {
+        // ── Modo SignalRGB: ele controla o teclado; o keyglow sai do caminho ─
+        if self.signalrgb_active {
+            // Nada é enviado ao teclado: o SignalRGB fala com ele direto, e
+            // dois programas no modo direto ao mesmo tempo piscam.
+            self.leave_direct();
+            self.audio_wanted.store(false, Ordering::Relaxed);
+
+            // Põe o firmware no modo em que ele não desenha nada (a luz
+            // apaga). Sem isso o efeito de fábrica continua rodando por baixo
+            // e briga com o que o SignalRGB manda. Só uma vez por conexão:
+            // cada chamada grava na memória do teclado.
+            if !self.signalrgb_off_applied
+                && let Some(kb) = self.kb.as_mut()
+                && !kb.hw_modes().is_empty()
+            {
+                let off = HwMode { mode: drivers::evision::MODE_CUSTOM, brightness: 4, ..self.hw };
+                match kb.set_hw_mode(&off) {
+                    Ok(()) => self.signalrgb_off_applied = true,
+                    Err(e) => self.disconnect(e.to_string()),
+                }
+            }
+
+            // Fica só com o quadro mais novo: os anteriores já são passado.
+            let mut latest = None;
+            if let Some(rx) = &self.signalrgb_rx {
+                while let Ok(frame) = rx.try_recv() {
+                    latest = Some(frame);
+                }
+            }
+
+            let len = self.grid.len();
+            let mut sh = self.shared.lock().unwrap();
+            match latest {
+                Some(mut frame) => {
+                    // O plugin pode mandar uma contagem diferente da grade
+                    // (outro teclado, outra versão): ajusta em vez de ignorar.
+                    frame.resize(len, [0; 3]);
+                    sh.preview = frame;
+                }
+                // Sem plugin mandando nada, um indicador de quem está no comando.
+                None if sh.preview.len() != len => sh.preview = vec![SIGNALRGB_PREVIEW; len],
+                None => {}
+            }
+            return; // pula os efeitos de software/hardware
+        }
+
         // Pega os eventos de tecla e o estado compartilhado de uma vez só,
         // para segurar os locks o mínimo possível.
         let (raw_events, pressed_codes) = {

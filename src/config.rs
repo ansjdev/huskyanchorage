@@ -39,6 +39,9 @@ pub struct Config {
     pub params: Params,
     /// `Some(i)` = efeito de software `i` ativo; `None` = efeito de fábrica.
     pub software_effect: Option<usize>,
+    /// `true` = modo "Do SignalRGB": o app escuta como servidor OpenRGB e
+    /// repassa as cores que o SignalRGB enviar ao teclado.
+    pub signalrgb: bool,
     /// Formato antigo (um teclado só); lido para migrar, nunca gravado.
     #[serde(skip_serializing)]
     key_to_led: BTreeMap<u16, usize>,

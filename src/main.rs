@@ -28,6 +28,7 @@ mod keyboard_view;
 mod keymap;
 mod onboard;
 mod screenshot;
+mod signalrgb;
 mod theme;
 
 use std::sync::atomic::AtomicBool;
@@ -99,7 +100,13 @@ fn main() -> eframe::Result {
     audio::spawn(Arc::clone(&audio), Arc::clone(&audio_wanted));
 
     let shared = Arc::new(Mutex::new(engine::Shared::new(config.params.clone())));
-    let start = engine::Start { hw: config.hw, software_effect: config.software_effect, device: config.last_device.clone() };
+
+    let start = engine::Start {
+        hw: config.hw,
+        software_effect: config.software_effect,
+        signalrgb: config.signalrgb,
+        device: config.last_device.clone(),
+    };
     let (tx, handle) = engine::spawn(Arc::clone(&shared), Arc::clone(&input), audio, audio_wanted, start);
 
     let options = eframe::NativeOptions {

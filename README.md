@@ -139,6 +139,8 @@ você aperta a tecla correspondente. A calibração fica salva por teclado em
 | `src/onboard.rs` | Formato do mapa de teclas e das macros gravadas no teclado |
 | `src/effects.rs` | Efeitos de software: **crie os seus aqui** |
 | `src/engine.rs` | Thread que conecta no teclado, roda o efeito e envia as imagens |
+| `src/signalrgb.rs` | Recebe por UDP as cores que o SignalRGB mandou ao teclado (modo "Do SignalRGB") |
+| `signalrgb/` | Plugin do SignalRGB que espelha as cores para o keyglow |
 | `src/input/` | Leitura das teclas: evdev (Linux), hook de teclado (Windows) e consulta do estado das teclas (macOS) |
 | `src/audio/` | Som do PC: `pw-record` (Linux) e loopback via cpal (Windows/macOS) + FFT em 21 faixas |
 | `src/app.rs` | Interface gráfica (estado e telas) |
@@ -204,6 +206,9 @@ No `Ctx` você tem: `time`, `dt`, `params` (cores, velocidade e brilho da interf
   suportado.
 - Perfis e camada Fn programável não existem nesse firmware: o teclado guarda um mapa de
   teclas só.
+- O modo "Do SignalRGB" só mostra as cores de verdade com o plugin de `signalrgb/`
+  instalado, e só no `320f:5016`. Sem ele, a prévia fica num tom fixo e o teclado
+  continua sendo controlado normalmente pelo SignalRGB.
 - Teclados LampArray e OpenRGB não têm efeitos de fábrica no keyglow: em "Do teclado", eles
   voltam ao efeito próprio deles.
 - Se o app for encerrado à força durante um efeito de software, o teclado EVision fica

@@ -28,6 +28,17 @@ use std::time::{Duration, Instant};
 
 /// Mínimo de teclas calibradas para desenhar o teclado físico.
 const MIN_MAPPED_FOR_PHYSICAL: usize = 20;
+
+/// Origem das cores do teclado (seletor de três estados no cabeçalho).
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum SourceMode {
+    /// Efeito gravado no teclado (firmware).
+    Hardware,
+    /// Efeito de software rodando no keyglow.
+    Software,
+    /// SignalRGB controla o teclado; keyglow só exibe a prévia.
+    SignalRgb,
+}
 /// Intervalo mínimo entre gravações de efeito de fábrica (cada uma escreve
 /// na memória do teclado).
 const HW_APPLY_INTERVAL: Duration = Duration::from_millis(250);
@@ -116,22 +127,46 @@ impl App {
         let _ = self.tx.send(cmd);
     }
 
-    fn is_software(&self) -> bool {
-        self.config.software_effect.is_some()
+    /// Devolve o modo de origem atual.
+    fn source_mode(&self) -> SourceMode {
+        if self.config.signalrgb {
+            SourceMode::SignalRgb
+        } else if self.config.software_effect.is_some() {
+            SourceMode::Software
+        } else {
+            SourceMode::Hardware
+        }
     }
 
-    fn set_mode(&mut self, software: bool) {
-        if software == self.is_software() {
+    /// Retorna `true` quando não está no modo de fábrica (o motor envia frames
+    /// ao teclado diretamente, seja via efeito de software ou SignalRGB).
+    fn is_software(&self) -> bool {
+        self.config.software_effect.is_some() || self.config.signalrgb
+    }
+
+    fn set_source_mode(&mut self, mode: SourceMode) {
+        if mode == self.source_mode() {
             return;
         }
-        if software {
-            let i = self.config.software_effect.unwrap_or(0);
-            self.config.software_effect = Some(i);
-            self.send(Cmd::Software(i));
-        } else {
-            self.config.software_effect = None;
-            self.send(Cmd::Hardware(self.hw_edit));
+        match mode {
+            SourceMode::Hardware => {
+                self.config.software_effect = None;
+                self.config.signalrgb = false;
+                self.send(Cmd::Hardware(self.hw_edit));
+            }
+            SourceMode::Software => {
+                let i = self.config.software_effect.unwrap_or(0);
+                self.config.software_effect = Some(i);
+                self.config.signalrgb = false;
+                self.send(Cmd::Software(i));
+            }
+            SourceMode::SignalRgb => {
+                self.config.software_effect = None;
+                self.config.signalrgb = true;
+                self.send(Cmd::SignalRgb(true));
+            }
         }
+        self.save();
     }
 
     /// Grava o efeito de fábrica editado, no máximo a cada `HW_APPLY_INTERVAL`.
@@ -197,14 +232,18 @@ impl App {
 
     /// Cor que o teclado está mostrando, usada como destaque da interface.
     fn light_color(&self) -> Rgb {
-        if self.is_software() {
-            self.config.params.primary
-        } else if self.hw_modes().is_empty() {
-            [160, 170, 200]
-        } else if self.hw_edit.random {
-            [127, 178, 255]
-        } else {
-            self.hw_edit.color
+        match self.source_mode() {
+            SourceMode::SignalRgb => [0, 140, 255], // azul SignalRGB
+            SourceMode::Software => self.config.params.primary,
+            SourceMode::Hardware => {
+                if self.hw_modes().is_empty() {
+                    [160, 170, 200]
+                } else if self.hw_edit.random {
+                    [127, 178, 255]
+                } else {
+                    self.hw_edit.color
+                }
+            }
         }
     }
 
@@ -368,9 +407,13 @@ impl App {
                 ui.add_space(16.0);
             }
             if self.ob.page == Page::Light {
-                let mut software = self.is_software();
-                segmented(ui, &mut software, [(false, "Do teclado"), (true, "Do app")]);
-                self.set_mode(software);
+                let mut mode = self.source_mode();
+                segmented(ui, &mut mode, [
+                    (SourceMode::Hardware,  "Do teclado"),
+                    (SourceMode::Software,  "Do app"),
+                    (SourceMode::SignalRgb, "Do SignalRGB"),
+                ]);
+                self.set_source_mode(mode);
                 ui.add_space(16.0);
             }
             self.device_picker(ui, devices);
@@ -563,6 +606,12 @@ impl App {
     }
 
     fn controls(&mut self, ui: &mut egui::Ui) {
+        // Modo SignalRGB: painel de ajuda em vez de lista de efeitos.
+        if self.config.signalrgb {
+            self.signalrgb_panel(ui);
+            return;
+        }
+
         ui.horizontal_top(|ui| {
             // Grade de efeitos: cabe inteira, sem rolagem.
             ui.vertical(|ui| {
@@ -602,6 +651,29 @@ impl App {
                     self.hardware_settings(ui);
                 }
             });
+        });
+    }
+
+    /// Painel exibido quando o modo "Do SignalRGB" está ativo.
+    ///
+    /// Neste modo o keyglow não envia nada ao teclado: quem manda as cores é o
+    /// SignalRGB. As cores da prévia chegam por UDP, mandadas pelo plugin a
+    /// cada quadro (veja `signalrgb.rs`).
+    fn signalrgb_panel(&mut self, ui: &mut egui::Ui) {
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Do SignalRGB").font(semibold(16.0)));
+            ui.add_space(6.0);
+            ui.label("O SignalRGB controla o teclado; o keyglow não altera as cores.");
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!(
+                    "A prévia acima vem do plugin HuskyAnchorage_Controller.js, por UDP \
+                     na porta {}. Sem ele a prévia fica num tom fixo — o teclado continua \
+                     funcionando igual.",
+                    crate::signalrgb::PORT
+                ))
+                .weak(),
+            );
         });
     }
 
